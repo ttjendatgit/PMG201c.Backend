@@ -29,6 +29,7 @@ public class Assessment
     public ICollection<RubricItem> RubricItems { get; set; } = new List<RubricItem>();
 
     public ICollection<Submission> Submissions { get; set; } = new List<Submission>();
+    public ICollection<GradingJob> GradingJobs { get; set; } = new List<GradingJob>();
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
