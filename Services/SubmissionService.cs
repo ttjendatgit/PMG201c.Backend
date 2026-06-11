@@ -164,6 +164,13 @@ public class SubmissionService
 
         if (submission is null) return null;
 
+        // GradingResult.SubmissionId FK uses NoAction — must delete grading results manually
+        var gradingResults = await _db.GradingResults
+            .Where(r => r.SubmissionId == submissionId)
+            .ToListAsync();
+        if (gradingResults.Any())
+            _db.GradingResults.RemoveRange(gradingResults);
+
         try
         {
             var absPath = Path.Combine(_env.ContentRootPath, submission.StoragePath);

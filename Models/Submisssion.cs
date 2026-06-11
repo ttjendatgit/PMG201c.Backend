@@ -27,6 +27,7 @@ public class Submission
     public string? ExtractionError { get; set; }
 
     public Assessment Assessment { get; set; } = null!;
+    public ICollection<GradingResult> GradingResults { get; set; } = new List<GradingResult>();
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
