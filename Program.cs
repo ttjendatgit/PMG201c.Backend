@@ -17,6 +17,9 @@ builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<AssessmentService>();
 builder.Services.AddSingleton<FileExtractionService>();
 builder.Services.AddScoped<AssessmentFileService>();
+builder.Services.AddSingleton<RubricParserService>();
+builder.Services.AddScoped<RubricService>();
+builder.Services.AddScoped<SubmissionService>();
 
 // Controllers
 builder.Services.AddControllers();
