@@ -23,6 +23,7 @@ builder.Services.AddScoped<SubmissionService>();
 builder.Services.AddScoped<IAiGradingService, MockAiGradingService>();
 builder.Services.AddSingleton<AiPromptBuilderService>();
 builder.Services.AddScoped<GradingJobService>();
+builder.Services.AddScoped<ReviewService>();
 
 // Controllers
 builder.Services.AddControllers();
