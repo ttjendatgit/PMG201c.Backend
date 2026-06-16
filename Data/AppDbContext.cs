@@ -118,6 +118,8 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Status).HasMaxLength(50).IsRequired();
             entity.Property(e => e.AiModel).HasMaxLength(100);
             entity.Property(e => e.ErrorMessage).HasMaxLength(2000);
+            entity.Property(e => e.ReviewStatus).HasMaxLength(30).IsRequired();
+            entity.Property(e => e.TeacherOverallComment).HasMaxLength(2000);
 
             // Cascade from Assessment; NOT from Submission to avoid multiple cascade paths
             entity.HasOne(e => e.Assessment)
@@ -146,6 +148,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Title).HasMaxLength(255).IsRequired();
             // RubricItemId is a plain column — no FK, so rubric changes don't break history
             entity.Property(e => e.RubricItemId);
+            entity.Property(e => e.TeacherComment).HasMaxLength(2000);
 
             entity.HasOne(e => e.GradingResult)
                 .WithMany(e => e.Items)

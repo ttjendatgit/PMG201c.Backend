@@ -16,6 +16,17 @@ public class GradingResult
     public string Status { get; set; } = "GRADED";
     public string? ErrorMessage { get; set; }
 
+    // Teacher review fields
+    public double? ReviewedRawScore { get; set; }
+    public double? ReviewedConvertedScore { get; set; }
+    public double? FinalRawScore { get; set; }
+    public double? FinalConvertedScore { get; set; }
+    public string? TeacherOverallComment { get; set; }
+    /// <summary>AI_GRADED | REVIEWED | FINALIZED</summary>
+    public string ReviewStatus { get; set; } = "AI_GRADED";
+    public DateTime? ReviewedAt { get; set; }
+    public DateTime? FinalizedAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

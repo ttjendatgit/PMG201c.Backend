@@ -275,6 +275,7 @@ public class GradingJobService
                 QuestionNo            = rubric.QuestionNo,
                 Title                 = rubric.Title,
                 MaxRawScore           = rubric.MaxRawScore,
+                MaxConvertedScore     = rubric.MaxConvertedScore,
                 AwardedRawScore       = Math.Round(awarded, 2),
                 AwardedConvertedScore = converted,
                 AiComment             = aiItem?.Comment,
@@ -339,35 +340,48 @@ public class GradingJobService
         UpdatedAt            = j.UpdatedAt
     };
 
-    private static GradingResultResponse MapResult(GradingResult r) => new()
+    internal static GradingResultResponse MapResult(GradingResult r) => new()
     {
-        Id                  = r.Id,
-        SubmissionId        = r.SubmissionId,
-        AssessmentId        = r.AssessmentId,
-        GradingJobId        = r.GradingJobId,
-        TotalRawScore       = r.TotalRawScore,
-        TotalConvertedScore = r.TotalConvertedScore,
-        AiOverallComment    = r.AiOverallComment,
-        AiModel             = r.AiModel,
-        Status              = r.Status,
-        ErrorMessage        = r.ErrorMessage,
-        Items               = r.Items
+        Id                    = r.Id,
+        SubmissionId          = r.SubmissionId,
+        AssessmentId          = r.AssessmentId,
+        GradingJobId          = r.GradingJobId,
+        TotalRawScore         = r.TotalRawScore,
+        TotalConvertedScore   = r.TotalConvertedScore,
+        AiOverallComment      = r.AiOverallComment,
+        AiModel               = r.AiModel,
+        ReviewedRawScore      = r.ReviewedRawScore,
+        ReviewedConvertedScore = r.ReviewedConvertedScore,
+        FinalRawScore         = r.FinalRawScore,
+        FinalConvertedScore   = r.FinalConvertedScore,
+        TeacherOverallComment = r.TeacherOverallComment,
+        ReviewStatus          = r.ReviewStatus,
+        ReviewedAt            = r.ReviewedAt,
+        FinalizedAt           = r.FinalizedAt,
+        Status                = r.Status,
+        ErrorMessage          = r.ErrorMessage,
+        Items                 = r.Items
             .OrderBy(i => i.QuestionNo)
             .Select(i => new GradingResultItemResponse
             {
-                Id                    = i.Id,
-                GradingResultId       = i.GradingResultId,
-                RubricItemId          = i.RubricItemId,
-                QuestionNo            = i.QuestionNo,
-                Title                 = i.Title,
-                MaxRawScore           = i.MaxRawScore,
-                AwardedRawScore       = i.AwardedRawScore,
-                AwardedConvertedScore = i.AwardedConvertedScore,
-                AiComment             = i.AiComment,
-                Evidence              = i.Evidence,
-                CreatedAt             = i.CreatedAt
+                Id                     = i.Id,
+                GradingResultId        = i.GradingResultId,
+                RubricItemId           = i.RubricItemId,
+                QuestionNo             = i.QuestionNo,
+                Title                  = i.Title,
+                MaxRawScore            = i.MaxRawScore,
+                MaxConvertedScore      = i.MaxConvertedScore,
+                AwardedRawScore        = i.AwardedRawScore,
+                AwardedConvertedScore  = i.AwardedConvertedScore,
+                AiComment              = i.AiComment,
+                Evidence               = i.Evidence,
+                ReviewedRawScore       = i.ReviewedRawScore,
+                ReviewedConvertedScore = i.ReviewedConvertedScore,
+                TeacherComment         = i.TeacherComment,
+                IsScoreOverridden      = i.IsScoreOverridden,
+                CreatedAt              = i.CreatedAt
             }).ToList(),
-        CreatedAt           = r.CreatedAt,
-        UpdatedAt           = r.UpdatedAt
+        CreatedAt             = r.CreatedAt,
+        UpdatedAt             = r.UpdatedAt
     };
 }
