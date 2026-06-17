@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using PMG201c.Backend.Configuration;
 using PMG201c.Backend.Data;
 using PMG201c.Backend.Services;
 
@@ -20,8 +21,30 @@ builder.Services.AddScoped<AssessmentFileService>();
 builder.Services.AddSingleton<RubricParserService>();
 builder.Services.AddScoped<RubricService>();
 builder.Services.AddScoped<SubmissionService>();
-builder.Services.AddScoped<IAiGradingService, MockAiGradingService>();
+// AI grading provider – switched by AI:Provider config key
+builder.Services.Configure<AiOptions>(builder.Configuration.GetSection(AiOptions.SectionName));
 builder.Services.AddSingleton<AiPromptBuilderService>();
+
+var aiProvider = builder.Configuration["AI:Provider"] ?? "Mock";
+if (aiProvider.Equals("OpenRouter", StringComparison.OrdinalIgnoreCase))
+{
+    var orSection      = builder.Configuration.GetSection("AI:OpenRouter");
+    var baseUrl        = orSection["BaseUrl"] ?? "https://openrouter.ai/api/v1";
+    var timeoutSeconds = orSection.GetValue<int>("TimeoutSeconds", 120);
+
+    builder.Services.AddHttpClient<IAiGradingService, OpenRouterAiGradingService>(client =>
+    {
+        client.BaseAddress = new Uri(baseUrl.TrimEnd('/') + '/');
+        client.Timeout     = TimeSpan.FromSeconds(timeoutSeconds);
+        client.DefaultRequestHeaders.Add("HTTP-Referer", "http://localhost:5000/pmg201c-gradeai");
+        client.DefaultRequestHeaders.Add("X-Title", "PMG201c GradeAI");
+    });
+}
+else
+{
+    builder.Services.AddScoped<IAiGradingService, MockAiGradingService>();
+}
+
 builder.Services.AddScoped<GradingJobService>();
 builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<ExcelExportService>();
