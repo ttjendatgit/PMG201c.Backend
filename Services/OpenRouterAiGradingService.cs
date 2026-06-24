@@ -8,6 +8,7 @@ namespace PMG201c.Backend.Services;
 public sealed class OpenRouterAiGradingService : IAiGradingService
 {
     private readonly HttpClient _http;
+    private readonly AiOptions _aiOptions;
     private readonly OpenRouterOptions _options;
     private readonly AiPromptBuilderService _promptBuilder;
     private readonly ILogger<OpenRouterAiGradingService> _log;
@@ -19,6 +20,7 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
         ILogger<OpenRouterAiGradingService> log)
     {
         _http          = http;
+        _aiOptions     = options.Value;
         _options       = options.Value.OpenRouter;
         _promptBuilder = promptBuilder;
         _log           = log;
@@ -89,8 +91,12 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
         req.Content = JsonContent.Create(body);
 
         _log.LogInformation(
-            "[OpenRouter] Request: model={Model}, rubric_items={Items}, student_text_len={Len}",
-            _options.Model, request.RubricItems.Count, request.StudentText.Length);
+            "[AI] Provider={Provider} Model={Model} RubricItems={Items} SubmissionLen={Len}{Retry}",
+            _aiOptions.Provider,
+            _options.Model,
+            request.RubricItems.Count,
+            request.StudentText.Length,
+            retryInstruction != null ? " [RETRY]" : "");
 
         HttpResponseMessage response;
         try
@@ -145,12 +151,46 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
 
         ValidateAiResponse(aiResponse, request.RubricItems);
 
+        // Safety-net: cap scores for sections that are absent from the submission
+        aiResponse = ApplyHeuristicCaps(aiResponse, request.StudentText, request.RubricItems);
+
         return aiResponse;
+    }
+
+    // ── Heuristic post-processing ─────────────────────────────────────────────
+
+    private AiGradingResponse ApplyHeuristicCaps(
+        AiGradingResponse response, string studentText, IList<RubricItemInput> rubricItems)
+    {
+        var (usesMarkers, presentSections) =
+            AiPromptBuilderService.DetectSectionMarkers(studentText, rubricItems);
+
+        if (!usesMarkers) return response;
+
+        var rubricNos = rubricItems.Select(r => r.QuestionNo).ToHashSet();
+        var newItems  = response.Items.ToList();
+        var modified  = false;
+
+        for (var i = 0; i < newItems.Count; i++)
+        {
+            var item = newItems[i];
+            if (!rubricNos.Contains(item.QuestionNo)) continue;
+            if (presentSections.Contains(item.QuestionNo)) continue;
+            if (item.AwardedRawScore <= 0) continue;
+
+            _log.LogWarning(
+                "[Heuristic] Capped questionNo={No} score {Old} → 0: section marker absent in submission.",
+                item.QuestionNo, item.AwardedRawScore);
+
+            newItems[i] = item with { AwardedRawScore = 0 };
+            modified    = true;
+        }
+
+        return modified ? response with { Items = newItems } : response;
     }
 
     // ── Validation ────────────────────────────────────────────────────────────
 
-    // Known placeholder strings the AI has returned when it ignored the actual grading task.
     private static readonly HashSet<string> PlaceholderPhrases = new(StringComparer.OrdinalIgnoreCase)
     {
         "nhận xét tổng quan bằng tiếng việt",
@@ -163,13 +203,34 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
         "comment here",
     };
 
-    // Positive/praising phrases that contradict an all-zero score response.
     private static readonly string[] PositivePraiseKeywords =
     {
         "đã hoàn chỉnh", "đầy đủ các ý", "nêu đầy đủ", "trình bày đầy đủ",
         "rất xuất sắc", "xuất sắc", "tuyệt vời", "hoàn hảo", "rất tốt",
         "làm rất tốt", "đã làm tốt", "thể hiện tốt", "sinh viên hiểu rõ",
         "sinh viên nắm vững", "đã nêu đủ", "đáp ứng đầy đủ", "trả lời đúng",
+    };
+
+    // Phrases meaning "completely absent" used to detect score/comment contradictions.
+    private static readonly string[] StrongMissingKeywords =
+    {
+        "hoàn toàn không", "hoàn toàn thiếu", "không có bất kỳ", "không hề có",
+        "không đề cập đến", "không được trả lời", "hoàn toàn bỏ sót",
+        "completely missing", "not addressed at all", "entirely absent",
+    };
+
+    // Values the AI writes in the evidence field when nothing was found.
+    private static readonly HashSet<string> NoEvidencePhrases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "không có bằng chứng",
+        "không có",
+        "không tìm thấy",
+        "thiếu bằng chứng",
+        "n/a",
+        "na",
+        "none",
+        "no evidence",
+        "không",
     };
 
     private static void ValidateAiResponse(AiGradingResponse response, IList<RubricItemInput> rubricItems)
@@ -197,13 +258,14 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
 
         foreach (var item in relevantItems)
         {
+            var rubric        = rubricItems.First(r => r.QuestionNo == item.QuestionNo);
+            var commentLower  = (item.Comment  ?? "").ToLowerInvariant();
+            var evidenceLower = (item.Evidence ?? "").Trim().ToLowerInvariant();
+
             // Empty comment
             if (string.IsNullOrWhiteSpace(item.Comment))
                 throw new AiValidationException(
                     $"Nhận xét (comment) của tiêu chí questionNo={item.QuestionNo} bị trống.");
-
-            var rubric       = rubricItems.First(r => r.QuestionNo == item.QuestionNo);
-            var commentLower = item.Comment.ToLowerInvariant();
 
             // Comment copies the rubric title or description verbatim
             if (IsCommentCopiedFromRubric(item.Comment, rubric))
@@ -221,6 +283,30 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
                 throw new AiValidationException(
                     $"Tất cả điểm là 0 nhưng nhận xét questionNo={item.QuestionNo} có vẻ khen ngợi – " +
                     "mâu thuẫn giữa điểm và nhận xét.");
+
+            // Score > 0 but evidence is empty or explicitly says "no evidence"
+            if (item.AwardedRawScore > 0)
+            {
+                var evidenceIsAbsent = string.IsNullOrWhiteSpace(item.Evidence)
+                    || NoEvidencePhrases.Contains(evidenceLower)
+                    || NoEvidencePhrases.Any(p => evidenceLower.StartsWith(p, StringComparison.Ordinal));
+
+                if (evidenceIsAbsent)
+                    throw new AiValidationException(
+                        $"Tiêu chí questionNo={item.QuestionNo}: điểm {item.AwardedRawScore} > 0 " +
+                        "nhưng evidence trống hoặc ghi 'Không có bằng chứng'. " +
+                        "Phải trích dẫn bằng chứng từ bài làm, hoặc đặt điểm về 0.");
+            }
+
+            // High score but comment strongly implies the content is completely missing
+            if (item.AwardedRawScore > rubric.MaxRawScore * 0.5
+                && StrongMissingKeywords.Any(k => commentLower.Contains(k)))
+            {
+                throw new AiValidationException(
+                    $"Mâu thuẫn questionNo={item.QuestionNo}: điểm {item.AwardedRawScore}/{rubric.MaxRawScore} " +
+                    "nhưng nhận xét chỉ nội dung hoàn toàn thiếu. " +
+                    "Điều chỉnh điểm về 0 hoặc sửa nhận xét cho phù hợp.");
+            }
         }
     }
 

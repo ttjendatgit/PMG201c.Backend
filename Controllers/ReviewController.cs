@@ -20,6 +20,33 @@ public class ReviewController : ControllerBase
             ?? User.FindFirstValue("sub")
             ?? throw new UnauthorizedAccessException("Invalid token."));
 
+    // ── POST /api/submissions/{submissionId}/manual-result ───────────────────
+
+    /// <summary>
+    /// Create or update a manual grading result when AI grading has failed or produced no result.
+    /// If a GradingResult already exists it is updated as REVIEWED; otherwise a new one is created.
+    /// </summary>
+    [HttpPost("api/submissions/{submissionId:guid}/manual-result")]
+    [ProducesResponseType(typeof(GradingResultResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ManualResult(Guid submissionId, [FromBody] ManualGradingRequest request)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        try
+        {
+            var result = await _review.ManualGradeAsync(TeacherId, submissionId, request);
+            return Ok(result);
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound(new { message = "Submission not found." });
+        }
+    }
+
     // ── PUT /api/grading-results/{gradingResultId}/review ────────────────────
 
     [HttpPut("api/grading-results/{gradingResultId:guid}/review")]

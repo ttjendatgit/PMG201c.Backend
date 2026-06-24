@@ -2,14 +2,20 @@ using Microsoft.EntityFrameworkCore;
 using PMG201c.Backend.Data;
 using PMG201c.Backend.DTOs.Grading;
 using PMG201c.Backend.DTOs.Review;
+using PMG201c.Backend.Models;
 
 namespace PMG201c.Backend.Services;
 
 public class ReviewService
 {
     private readonly AppDbContext _db;
+    private readonly ILogger<ReviewService> _log;
 
-    public ReviewService(AppDbContext db) => _db = db;
+    public ReviewService(AppDbContext db, ILogger<ReviewService> log)
+    {
+        _db  = db;
+        _log = log;
+    }
 
     // ── PUT /api/grading-results/{gradingResultId}/review ────────────────────
 
@@ -112,7 +118,148 @@ public class ReviewService
         }).ToList();
     }
 
+    // ── POST /api/submissions/{submissionId}/manual-result ───────────────────
+
+    public async Task<GradingResultResponse> ManualGradeAsync(
+        Guid teacherId, Guid submissionId, ManualGradingRequest request)
+    {
+        var submission = await _db.Submissions
+            .Include(s => s.Assessment)
+                .ThenInclude(a => a.RubricItems)
+            .FirstOrDefaultAsync(s => s.Id == submissionId
+                                   && s.Assessment.TeacherId == teacherId)
+            ?? throw new KeyNotFoundException("Submission not found.");
+
+        var rubricMap = submission.Assessment.RubricItems.ToDictionary(r => r.Id);
+
+        var existing = await _db.GradingResults
+            .Include(r => r.Items)
+            .Where(r => r.SubmissionId == submissionId)
+            .OrderByDescending(r => r.CreatedAt)
+            .FirstOrDefaultAsync();
+
+        GradingResult result;
+
+        if (existing is not null)
+        {
+            _log.LogInformation("[ManualGrading] Updating GradingResult {ResultId} for submission {SubmissionId}",
+                existing.Id, submissionId);
+
+            result = existing;
+
+            if (result.Items.Any())
+            {
+                foreach (var itemReq in request.Items)
+                {
+                    var item = result.Items.FirstOrDefault(i => i.RubricItemId == itemReq.RubricItemId);
+                    if (item is null) continue;
+
+                    var clamped   = Math.Clamp(itemReq.ReviewedRawScore, 0, item.MaxRawScore);
+                    var converted = item.MaxRawScore > 0
+                        ? Math.Round(clamped / item.MaxRawScore * item.MaxConvertedScore, 2)
+                        : 0;
+
+                    item.ReviewedRawScore       = Math.Round(clamped, 2);
+                    item.ReviewedConvertedScore = converted;
+                    item.TeacherComment         = itemReq.TeacherComment;
+                    item.IsScoreOverridden      = true;
+                    item.UpdatedAt              = DateTime.UtcNow;
+                }
+            }
+            else
+            {
+                // ERROR result with no items — populate from manual request
+                foreach (var item in BuildManualItems(request.Items, rubricMap))
+                    result.Items.Add(item);
+
+                var manualRaw  = Math.Round(result.Items.Sum(i => i.ReviewedRawScore ?? 0), 2);
+                var manualConv = Math.Round(result.Items.Sum(i => i.ReviewedConvertedScore ?? 0), 2);
+                result.TotalRawScore       = manualRaw;
+                result.TotalConvertedScore = manualConv;
+                result.Status              = "GRADED";
+                result.ErrorMessage        = null;
+            }
+
+            result.ReviewedRawScore       = Math.Round(result.Items.Sum(i => i.ReviewedRawScore ?? i.AwardedRawScore), 2);
+            result.ReviewedConvertedScore = Math.Round(result.Items.Sum(i => i.ReviewedConvertedScore ?? i.AwardedConvertedScore), 2);
+            result.TeacherOverallComment  = request.TeacherOverallComment;
+            result.ReviewStatus           = "REVIEWED";
+            result.ReviewedAt             = DateTime.UtcNow;
+            result.UpdatedAt              = DateTime.UtcNow;
+        }
+        else
+        {
+            _log.LogInformation("[ManualGrading] Creating GradingResult for submission {SubmissionId}", submissionId);
+
+            var items     = BuildManualItems(request.Items, rubricMap);
+            var totalRaw  = Math.Round(items.Sum(i => i.ReviewedRawScore ?? 0), 2);
+            var totalConv = Math.Round(items.Sum(i => i.ReviewedConvertedScore ?? 0), 2);
+
+            result = new GradingResult
+            {
+                SubmissionId           = submissionId,
+                AssessmentId           = submission.Assessment.Id,
+                TotalRawScore          = totalRaw,
+                TotalConvertedScore    = totalConv,
+                ReviewedRawScore       = totalRaw,
+                ReviewedConvertedScore = totalConv,
+                TeacherOverallComment  = request.TeacherOverallComment,
+                AiModel                = "manual",
+                AiOverallComment       = "Manual grading",
+                Status                 = "GRADED",
+                ReviewStatus           = "REVIEWED",
+                ReviewedAt             = DateTime.UtcNow,
+                Items                  = items
+            };
+
+            _db.GradingResults.Add(result);
+        }
+
+        submission.GradingStatus = "GRADED";
+        submission.UpdatedAt     = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        _log.LogInformation("[ManualGrading] Saved result {ResultId} for submission {SubmissionId}",
+            result.Id, submissionId);
+
+        return GradingJobService.MapResult(result);
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
+
+    private static List<GradingResultItem> BuildManualItems(
+        IEnumerable<ManualGradingItemRequest> itemRequests,
+        Dictionary<Guid, RubricItem> rubricMap)
+    {
+        return itemRequests.Select(itemReq =>
+        {
+            rubricMap.TryGetValue(itemReq.RubricItemId, out var rubric);
+            var maxRaw   = rubric?.MaxRawScore ?? 0;
+            var maxConv  = rubric?.MaxConvertedScore ?? 0;
+            var clamped  = Math.Clamp(itemReq.ReviewedRawScore, 0, maxRaw);
+            var converted = maxRaw > 0
+                ? Math.Round(clamped / maxRaw * maxConv, 2)
+                : 0;
+
+            return new GradingResultItem
+            {
+                RubricItemId           = itemReq.RubricItemId,
+                QuestionNo             = rubric?.QuestionNo ?? itemReq.QuestionNo,
+                Title                  = rubric?.Title ?? string.Empty,
+                MaxRawScore            = maxRaw,
+                MaxConvertedScore      = maxConv,
+                AwardedRawScore        = 0,
+                AwardedConvertedScore  = 0,
+                ReviewedRawScore       = Math.Round(clamped, 2),
+                ReviewedConvertedScore = converted,
+                TeacherComment         = itemReq.TeacherComment,
+                IsScoreOverridden      = true,
+                AiComment              = "Manual grading",
+                Evidence               = null
+            };
+        }).ToList();
+    }
 
     private async Task<Models.GradingResult> LoadResultForTeacher(Guid teacherId, Guid gradingResultId)
     {
