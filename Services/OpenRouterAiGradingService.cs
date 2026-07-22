@@ -336,14 +336,32 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
 
     // ── Response extraction ──────────────────────────────────────────────────
 
-    private static string ExtractChoiceContent(string responseJson)
+    private string ExtractChoiceContent(string responseJson)
     {
         using var doc = JsonDocument.Parse(responseJson);
-        return doc.RootElement
+        var message = doc.RootElement
             .GetProperty("choices")[0]
-            .GetProperty("message")
-            .GetProperty("content")
-            .GetString() ?? string.Empty;
+            .GetProperty("message");
+
+        var content = message.GetProperty("content").GetString() ?? "";
+        var reasoning = message.TryGetProperty("reasoning_content", out var rc)
+            ? rc.GetString() ?? "" : "";
+
+        _log.LogInformation("[ExtractChoice] contentLen={CLen} reasoningLen={RLen} contentStarts={CStart} reasoningStarts={RStart}",
+            content.Length, reasoning.Length,
+            content.Length > 0 ? content[..Math.Min(50, content.Length)] : "(empty)",
+            reasoning.Length > 0 ? reasoning[..Math.Min(50, reasoning.Length)] : "(empty)");
+
+        // If content looks like valid JSON, use it
+        if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith('{'))
+            return content;
+
+        // Otherwise try reasoning_content (some models put the answer there)
+        if (!string.IsNullOrWhiteSpace(reasoning) && reasoning.TrimStart().StartsWith('{'))
+            return reasoning;
+
+        // Fallback to content even if not JSON (ParseAiContent will handle it)
+        return content;
     }
 
     // ── Robust JSON parsing ──────────────────────────────────────────────────
@@ -367,7 +385,8 @@ public sealed class OpenRouterAiGradingService : IAiGradingService
             if (result is not null) return result;
         }
 
-        _log.LogWarning("[OpenRouter] Could not parse AI JSON. Content length={Len}", content.Length);
+        _log.LogWarning("[OpenRouter] Could not parse AI JSON. Content length={Len}. Preview: {Preview}",
+            content.Length, content.Length > 500 ? content[..500] + "..." : content);
         throw new AiParsingException(
             $"AI response could not be parsed as valid JSON (length={content.Length}).");
     }
