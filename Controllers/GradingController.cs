@@ -55,6 +55,20 @@ public class GradingController : ControllerBase
             return result is null ? NotFound() : Ok(result);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { message = ex.Message }); }
+        // A second grade request arrived while this submission was already
+        // being graded — reject instead of racing two AI calls.
+        catch (GradingInProgressException ex) { return Conflict(new { message = ex.Message }); }
+        // Network/timeout talking to the AI provider (an ERROR GradingResult
+        // was already persisted by GradeSingleAsync's own catch block).
+        catch (AiTransientException ex)
+        {
+            return StatusCode(StatusCodes.Status504GatewayTimeout, new { message = ex.Message });
+        }
+        // AI returned content that could not be parsed as valid JSON, or
+        // failed the response's business-rule validation — this is a content
+        // problem, not a server bug.
+        catch (AiParsingException ex) { return UnprocessableEntity(new { message = ex.Message }); }
+        catch (AiValidationException ex) { return UnprocessableEntity(new { message = ex.Message }); }
     }
 
     /// <summary>Get the latest grading result for a submission.</summary>

@@ -183,6 +183,13 @@ public class GradingJobService
             throw new InvalidOperationException(
                 "Assessment has no rubric items. Run parse-rubric first.");
 
+        // Reject a second concurrent grade request for the same submission
+        // instead of racing two AI calls to RemoveRange/Add the same
+        // GradingResult row (checked before we touch GradingStatus ourselves).
+        if (submission.GradingStatus == "GRADING")
+            throw new GradingInProgressException(
+                "This submission is already being graded. Please wait for it to finish.");
+
         submission.GradingStatus = "GRADING";
         submission.UpdatedAt     = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -384,4 +391,14 @@ public class GradingJobService
         CreatedAt             = r.CreatedAt,
         UpdatedAt             = r.UpdatedAt
     };
+}
+
+/// <summary>
+/// Thrown when a single-submission grade request arrives while that
+/// submission is already being graded (GradingStatus == "GRADING").
+/// Mapped to HTTP 409 Conflict by GradingController.
+/// </summary>
+public sealed class GradingInProgressException : Exception
+{
+    public GradingInProgressException(string message) : base(message) { }
 }
